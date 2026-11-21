@@ -6,8 +6,8 @@
 // ---------------------------------------------------------------- konfigurácia
 const OBCE = [
   { id: 'sokol', nazov: 'Sokoľ', stred: [21.2165, 48.8165], zoom: 15.3 },
-  { id: 'kostolany', nazov: 'Kostoľany nad Hornádom', stred: [21.2470, 48.8040], zoom: 15 },
-  { id: 'druzstevna', nazov: 'Družstevná pri Hornáde', stred: [21.2420, 48.7960], zoom: 14.8 },
+  { id: 'kostolany', nazov: 'Kostoľany nad Hornádom', stred: [21.2282, 48.7876], zoom: 14 },
+  { id: 'druzstevna', nazov: 'Družstevná pri Hornáde', stred: [21.2536, 48.8043], zoom: 14 },
 ];
 const OKOLIE = '(48.70,21.10,48.90,21.40)'; // rámec pre vyhľadanie obcí v Overpass (juh, západ, sever, východ)
 
@@ -277,7 +277,7 @@ function osmNaGeoJSON(json) {
 }
 async function nacitajObec(obec) {
   if (S.data[obec.id]) return S.data[obec.id];
-  const kluc = 'obec3d:v1:' + obec.id;
+  const kluc = 'obec3d:v2:' + obec.id;
   let d = cache.get(kluc, 7 * 864e5);
   if (!d) {
     const q = `[out:json][timeout:60];

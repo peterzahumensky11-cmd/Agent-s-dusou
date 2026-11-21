@@ -2,9 +2,9 @@
 # Sonda: overí dostupnosť a štruktúru verejných služieb (ÚGKK, ZBGIS, Overpass).
 set +e
 O="Origin: https://peterzahumensky11-cmd.github.io"
-g(){ curl -sS -m 90 -H "$O" -A "obce3d-probe/1.0" "$@"; }
+g(){ curl -sS -m 12 -H "$O" -A "obce3d-probe/1.0" "$@"; }
 hdr(){ echo; echo "######## $1"; }
-cors(){ echo "-- CORS/status $1"; curl -sS -m 60 -o /dev/null -D - -H "$O" -A "obce3d-probe/1.0" "$1" | grep -iE "^HTTP|access-control|content-type" ; }
+cors(){ echo "-- CORS/status $1"; curl -sS -m 12 -o /dev/null -D - -H "$O" -A "obce3d-probe/1.0" "$1" | grep -iE "^HTTP|access-control|content-type" ; }
 
 hdr "OVERPASS obce"
 g "https://overpass-api.de/api/interpreter" --data-urlencode 'data=[out:json][timeout:60];relation[boundary=administrative][name~"^(Sokoľ|Kostoľany nad Hornádom|Družstevná pri Hornáde)$"](48.70,21.10,48.90,21.40);out tags bb;' | head -c 3000
