@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16302b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>3D mapa obcí – Sokoľ, Kostoľany nad Hornádom, Družstevná pri Hornáde</title>
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map" aria-label="Mapa"></div>
+
+<header id="bar">
+  <label class="sr" for="obec">Obec</label>
+  <select id="obec"></select>
+  <button id="btnPanel" type="button" aria-expanded="false" aria-controls="panel">Vrstvy a filtre</button>
+</header>
+
+<aside id="panel" hidden>
+  <section>
+    <h2>Podklad</h2>
+    <label><input type="radio" name="base" value="orto" checked> Ortofoto</label>
+    <label><input type="radio" name="base" value="osm"> Mapa OSM</label>
+  </section>
+  <section>
+    <h2>Vrstvy</h2>
+    <label><input type="checkbox" id="lyrBudovy" checked> 3D domy (OpenStreetMap)</label>
+    <label><input type="checkbox" id="lyrC" checked> Parcely registra C (kresba)</label>
+    <label><input type="checkbox" id="lyrE"> Parcely registra E (kresba)</label>
+    <label><input type="checkbox" id="lyrHranica" checked> Hranica obce</label>
+  </section>
+  <section>
+    <h2>Filter parciel</h2>
+    <label><input type="checkbox" id="fOn"> Zapnúť filter (načíta parcely C v obci)</label>
+    <div id="fBox" class="off">
+      <label><input type="checkbox" id="fVolne"> Len nezastavané parcely</label>
+      <label class="col">Druh pozemku
+        <select id="fDruh"><option value="">všetky</option></select>
+      </label>
+      <div class="row">
+        <label class="col">Výmera od (m²)<input id="fMin" type="number" inputmode="numeric" min="0" placeholder="0"></label>
+        <label class="col">do (m²)<input id="fMax" type="number" inputmode="numeric" min="0" placeholder="∞"></label>
+      </div>
+      <p id="fStav" class="muted"></p>
+    </div>
+  </section>
+  <section>
+    <h2>Stav služieb</h2>
+    <ul id="stav"></ul>
+    <p class="muted"><a href="diag.html">Diagnostika služieb</a></p>
+  </section>
+  <p class="muted small">Údaje: © prispievatelia OpenStreetMap (ODbL), ÚGKK SR – kataster nehnuteľností a ZBGIS.
+  Mapa má informatívny charakter a nezobrazuje údaje o vlastníkoch.</p>
+</aside>
+
+<section id="info" hidden aria-live="polite">
+  <button id="infoClose" type="button" aria-label="Zavrieť">×</button>
+  <div id="infoBody"></div>
+</section>
+
+<div id="toast" hidden></div>
+
+<script src="vendor/maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

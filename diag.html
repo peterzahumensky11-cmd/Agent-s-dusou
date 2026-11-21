@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagnostika služieb – 3D mapa obcí</title>
+<style>body{font:15px/1.45 system-ui,sans-serif;margin:16px;max-width:900px;color:#1c2422}
+pre{background:#f1efe8;padding:10px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+button{font:inherit;font-weight:600;padding:10px 16px;border-radius:8px;border:0;background:#16302b;color:#fff}</style></head>
+<body>
+<h1>Diagnostika služieb</h1>
+<p>Stránka z vášho prehliadača vyskúša verejné služby, ktoré mapa používa (OpenStreetMap, ÚGKK SR, ZBGIS),
+a vypíše, ktoré odpovedajú. Neposiela žiadne osobné údaje. Výsledok skopírujte tlačidlom a pošlite späť.</p>
+<p><button id="run">Spustiť test</button> <button id="copy" disabled>Kopírovať výsledok</button> <a href="./">← späť na mapu</a></p>
+<pre id="out">Čaká na spustenie…</pre>
+<script>
+const K='https://kataster.skgeodesy.sk', R=K+'/eskn/rest/services', I='https://inspirews.skgeodesy.sk/geoserver', Z='https://zbgisws.skgeodesy.sk';
+const BB='2361000,6243000,2361600,6243600', PT='geometry=21.2165,48.8165&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=false&f=json';
+const GM='service=WMS&version=1.3.0&request=GetMap&styles=&crs=EPSG:3857&bbox='+BB+'&width=256&height=256';
+const T=[
+ ['overpass','https://overpass-api.de/api/interpreter?data='+encodeURIComponent('[out:json];relation[boundary=administrative][name~"^(Sokoľ|Kostoľany nad Hornádom|Družstevná pri Hornáde)$"](48.70,21.10,48.90,21.40);out tags bb;'),1500],
+ ['rest-VRM',R+'/VRM?f=json',1500],['rest-NR',R+'/NR?f=json',1500],
+ ['rest-C-layer',R+'/VRM/parcels_c_view/MapServer/0?f=json','fields'],['rest-E-layer',R+'/VRM/parcels_e_view/MapServer/0?f=json','fields'],
+ ['rest-C-bod',R+'/VRM/parcels_c_view/MapServer/0/query?'+PT,1500],['rest-E-bod',R+'/VRM/parcels_e_view/MapServer/0/query?'+PT,1500],
+ ['odata-KU',K+"/PortalOData/CadastralUnits?$top=3&$filter=startswith(Name,'Soko')",800],
+ ['odata-C',K+"/PortalOData/ParcelsC?$top=1&$select=Id,No,Area&$expand=Kind($select=Name,Code),Folio($select=No),CadastralUnit($select=Name,Code)",800],
+ ['wms-kn-caps',K+'/eskn/services/NR/kn_wms_norm/MapServer/WmsServer?service=WMS&version=1.3.0&request=GetCapabilities','caps'],
+ ['wms-uo-caps',K+'/eskn/services/NR/uo_wms_norm/MapServer/WmsServer?service=WMS&version=1.3.0&request=GetCapabilities','caps'],
+ ['export-kn',R+'/NR/kn_wms_norm/MapServer/export?bbox='+BB+'&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image',0],
+ ['orto-wms-caps',Z+'/zbgis_ortofoto_wms/service.svc/get?service=WMS&version=1.3.0&request=GetCapabilities','caps'],
+ ['orto-wmts-caps',Z+'/zbgis_ortofoto_wmts/service.svc/get?service=WMTS&request=GetCapabilities','caps'],
+ ['orto-freemap','https://ofmozaika.tiles.freemap.sk/16/36630/22467.jpg',0],
+ ['inspire-wms-C',I+'/cp/ows?'+GM+'&format=image/png&transparent=true&layers=CP.CadastralParcel',0],
+ ['inspire-wms-E',I+'/cp_uo/ows?'+GM+'&format=image/png&transparent=true&layers=CP.CadastralParcel',0],
+ ['inspire-wfs-caps',I+'/cp/ows?service=WFS&version=2.0.0&request=GetCapabilities','caps'],
+ ['inspire-wfs-C',I+'/cp/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=cp:CadastralParcel&count=1&srsName=EPSG:4326&outputFormat=application/json&bbox=48.8160,21.2160,48.8170,21.2170,urn:ogc:def:crs:EPSG::4326',1200],
+];
+const out=document.getElementById('out');
+function uniq(a){return [...new Set(a)]}
+async function one([n,u,mode]){
+  const t0=Date.now();
+  try{
+    const c=new AbortController();setTimeout(()=>c.abort(),30000);
+    const r=await fetch(u,{signal:c.signal});const ct=r.headers.get('content-type')||'';
+    let d='';
+    if(mode){const x=await r.text();
+      if(mode==='caps')d='vrstvy='+uniq([...x.matchAll(/<(?:\w+:)?(?:Name|Identifier)>([^<]+)</g)].map(m=>m[1])).slice(0,40).join('|')+' 3857='+/3857/.test(x)+' json='+/json/i.test(x);
+      else if(mode==='fields'){try{const j=JSON.parse(x);d=(j.name||'')+' '+(j.geometryType||'')+' polia='+(j.fields||[]).map(f=>f.name).join(',')+(j.error?' CHYBA '+JSON.stringify(j.error):'')}catch(e){d=x.slice(0,300)}}
+      else d=x.slice(0,mode).replace(/\s+/g,' ');}
+    return `[${r.ok?'OK':'ZLE'}] ${n}: HTTP ${r.status} ${ct} ${Date.now()-t0}ms\n   ${d}`;
+  }catch(e){return `[CHYBA] ${n}: ${e.name} ${e.message} (${Date.now()-t0}ms) – služba neodpovedá alebo nepovoľuje prístup z prehliadača (CORS)`}
+}
+document.getElementById('run').onclick=async()=>{
+  out.textContent='Pôvod: '+location.origin+'\n'+navigator.userAgent+'\n\n';
+  for(const t of T){out.textContent+=await one(t)+'\n'}
+  out.textContent+='\nHOTOVO';document.getElementById('copy').disabled=false;
+};
+document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(out.textContent).then(()=>alert('Skopírované'),()=>alert('Označte text ručne a skopírujte ho.'));
+</script></body></html>
