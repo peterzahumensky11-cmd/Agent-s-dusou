@@ -5,7 +5,7 @@
 pre{background:#f1efe8;padding:10px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
 button{font:inherit;font-weight:600;padding:10px 16px;border-radius:8px;border:0;background:#16302b;color:#fff}</style></head>
 <body>
-<h1>Diagnostika služieb</h1>
+<h1>Diagnostika služieb (2)</h1>
 <p>Stránka z vášho prehliadača vyskúša verejné služby, ktoré mapa používa (OpenStreetMap, ÚGKK SR, ZBGIS),
 a vypíše, ktoré odpovedajú. Neposiela žiadne osobné údaje. Výsledok skopírujte tlačidlom a pošlite späť.</p>
 <p><button id="run">Spustiť test</button> <button id="copy" disabled>Kopírovať výsledok</button> <a href="./">← späť na mapu</a></p>
@@ -14,8 +14,29 @@ a vypíše, ktoré odpovedajú. Neposiela žiadne osobné údaje. Výsledok skop
 const K='https://kataster.skgeodesy.sk', R=K+'/eskn/rest/services', I='https://inspirews.skgeodesy.sk/geoserver', Z='https://zbgisws.skgeodesy.sk';
 const BB='2361000,6243000,2361600,6243600', PT='geometry=21.2165,48.8165&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=false&f=json';
 const GM='service=WMS&version=1.3.0&request=GetMap&styles=&crs=EPSG:3857&bbox='+BB+'&width=256&height=256';
+const X=2361810,Y=6243345,D=15; // bod v intraviláne obce Sokoľ (EPSG:3857)
+const GFI=(l,f)=>'service=WMS&version=1.3.0&request=GetFeatureInfo&styles=&crs=EPSG:3857&bbox='+[X-D,Y-D,X+D,Y+D]+'&width=101&height=101&i=50&j=50&layers='+l+'&query_layers='+l+'&feature_count=20&info_format='+f;
+const KNL='15,14,13,12,11,10,8,7,6,5,4,3,2,1', UOL='5,4,3,2,0';
+const OQ=encodeURIComponent('[out:json][timeout:25];relation[boundary=administrative][name="Sokoľ"](48.70,21.10,48.90,21.40);out tags bb;');
 const T=[
- ['overpass','https://overpass-api.de/api/interpreter?data='+encodeURIComponent('[out:json];relation[boundary=administrative][name~"^(Sokoľ|Kostoľany nad Hornádom|Družstevná pri Hornáde)$"](48.70,21.10,48.90,21.40);out tags bb;'),1500],
+ ['overpass-de','https://overpass-api.de/api/interpreter?data='+OQ,300],
+ ['overpass-coffee','https://overpass.private.coffee/api/interpreter?data='+OQ,300],
+ ['overpass-kumi','https://overpass.kumi.systems/api/interpreter?data='+OQ,300],
+ ['kn-getmap',K+'/eskn/services/NR/kn_wms_norm/MapServer/WmsServer?'+GM+'&format=image/png&transparent=true&layers='+KNL,0],
+ ['uo-getmap',K+'/eskn/services/NR/uo_wms_norm/MapServer/WmsServer?'+GM+'&format=image/png&transparent=true&layers='+UOL,0],
+ ['orto-getmap',Z+'/zbgis_ortofoto_wms/service.svc/get?'+GM+'&format=image/jpeg&layers=3,2,1',0],
+ ['esri-tile','https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/16/22467/36630',0],
+ ['kn-caps-full',K+'/eskn/services/NR/kn_wms_norm/MapServer/WmsServer?service=WMS&version=1.3.0&request=GetCapabilities','capsfull'],
+ ['uo-caps-full',K+'/eskn/services/NR/uo_wms_norm/MapServer/WmsServer?service=WMS&version=1.3.0&request=GetCapabilities','capsfull'],
+ ['kn-gfi-xml',K+'/eskn/services/NR/kn_wms_norm/MapServer/WmsServer?'+GFI(KNL,'text/xml'),'gfi'],
+ ['kn-gfi-geojson',K+'/eskn/services/NR/kn_wms_norm/MapServer/WmsServer?'+GFI(KNL,'application/geo%2Bjson'),'gfi'],
+ ['uo-gfi-xml',K+'/eskn/services/NR/uo_wms_norm/MapServer/WmsServer?'+GFI(UOL,'text/xml'),'gfi'],
+ ['inspire-wms-E-caps',I+'/cp_uo/ows?service=WMS&version=1.3.0&request=GetCapabilities','caps'],
+ ['inspire-wfs-E-caps',I+'/cp_uo/ows?service=WFS&version=2.0.0&request=GetCapabilities','caps'],
+ ['inspire-wfs-C',I+'/cp/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=cp:CP.CadastralParcel&count=2&srsName=EPSG:4326&outputFormat=application/json&bbox=48.8163,21.2163,48.8167,21.2167,urn:ogc:def:crs:EPSG::4326','wfs'],
+ ['inspire-wfs-E',I+'/cp_uo/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=cp_uo:CP.CadastralParcel&count=2&srsName=EPSG:4326&outputFormat=application/json&bbox=48.8163,21.2163,48.8167,21.2167,urn:ogc:def:crs:EPSG::4326','wfs'],
+ ['inspire-gfi-C',I+'/cp/ows?'+GFI('CP.CadastralParcel','application/json'),'gfi'],
+];relation[boundary=administrative][name~"^(Sokoľ|Kostoľany nad Hornádom|Družstevná pri Hornáde)$"](48.70,21.10,48.90,21.40);out tags bb;'),1500],
  ['rest-VRM',R+'/VRM?f=json',1500],['rest-NR',R+'/NR?f=json',1500],
  ['rest-C-layer',R+'/VRM/parcels_c_view/MapServer/0?f=json','fields'],['rest-E-layer',R+'/VRM/parcels_e_view/MapServer/0?f=json','fields'],
  ['rest-C-bod',R+'/VRM/parcels_c_view/MapServer/0/query?'+PT,1500],['rest-E-bod',R+'/VRM/parcels_e_view/MapServer/0/query?'+PT,1500],
@@ -42,6 +63,9 @@ async function one([n,u,mode]){
     let d='';
     if(mode){const x=await r.text();
       if(mode==='caps')d='vrstvy='+uniq([...x.matchAll(/<(?:\w+:)?(?:Name|Identifier)>([^<]+)</g)].map(m=>m[1])).slice(0,40).join('|')+' 3857='+/3857/.test(x)+' json='+/json/i.test(x);
+      else if(mode==='capsfull')d='vrstvy='+[...x.matchAll(/<Layer[^>]*>\s*<Name>([^<]+)<\/Name>\s*<Title>(?:<!\[CDATA\[)?([^<\]]+)/g)].map(m=>m[1]+'='+m[2]).join('|')+' info='+uniq([...x.matchAll(/<Format>([^<]+)</g)].map(m=>m[1])).join(',');
+      else if(mode==='wfs'){try{const j=JSON.parse(x);const f=(j.features||[])[0];d='pocet='+(j.features||[]).length+' id='+(f&&f.id)+' polia='+JSON.stringify(f&&f.properties).slice(0,900)+' sur='+JSON.stringify(f&&f.geometry&&f.geometry.coordinates).slice(0,90)}catch(e){d=x.slice(0,500)}}
+      else if(mode==='gfi'){const polia=uniq([...x.matchAll(/([\wÀ-ž.:]+)="/g)].map(m=>m[1]).concat([...x.matchAll(/"([^"]{1,40})":/g)].map(m=>m[1])));d='dlzka='+x.length+' polia='+polia.slice(0,80).join(',')+' | ukazka='+x.replace(/\s+/g,' ').slice(0,700)}
       else if(mode==='fields'){try{const j=JSON.parse(x);d=(j.name||'')+' '+(j.geometryType||'')+' polia='+(j.fields||[]).map(f=>f.name).join(',')+(j.error?' CHYBA '+JSON.stringify(j.error):'')}catch(e){d=x.slice(0,300)}}
       else d=x.slice(0,mode).replace(/\s+/g,' ');}
     return `[${r.ok?'OK':'ZLE'}] ${n}: HTTP ${r.status} ${ct} ${Date.now()-t0}ms\n   ${d}`;

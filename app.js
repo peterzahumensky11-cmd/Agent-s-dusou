@@ -18,41 +18,31 @@ const OVERPASS = [
 ];
 
 const KN = 'https://kataster.skgeodesy.sk';
-const REST = KN + '/eskn/rest/services';
 const INSPIRE = 'https://inspirews.skgeodesy.sk/geoserver';
 const WMS_Q = 'service=WMS&version=1.3.0&request=GetMap&styles=&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=512&height=512';
-const EXPORT_Q = 'bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&format=png32&transparent=true&f=image';
 
 // Kandidáti na rastrové vrstvy – použije sa prvý, ktorý prehliadaču odpovie (vyžaduje CORS).
+// Služby REST a OData katastra prístup z cudzej stránky nepovoľujú, preto sa nepoužívajú.
 const RASTRE = {
   orto: [
-    { nazov: 'ZBGIS ortofoto (WMS)', caps: 'https://zbgisws.skgeodesy.sk/zbgis_ortofoto_wms/service.svc/get',
-      wms: 'https://zbgisws.skgeodesy.sk/zbgis_ortofoto_wms/service.svc/get?' + WMS_Q + '&format=image/jpeg&layers=' },
-    { nazov: 'ZBGIS ortofoto (WMTS)',
-      url: 'https://zbgisws.skgeodesy.sk/zbgis_ortofoto_wmts/service.svc/get?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=WMS_zbgis_ortofoto_wmts&STYLE=default&FORMAT=image/jpeg&TILEMATRIXSET=default028mm&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', tile: 256 },
-    { nazov: 'Ortofotomozaika SR (freemap.sk)', url: 'https://ofmozaika.tiles.freemap.sk/{z}/{x}/{y}.jpg', tile: 256,
-      attr: 'Ortofotomozaika SR © GKÚ, NLC' },
+    { nazov: 'ZBGIS ortofoto (WMS)', caps: 'https://zbgisws.skgeodesy.sk/zbgis_ortofoto_wms/service.svc/get', fmt: 'image/jpeg' },
     { nazov: 'Esri World Imagery (náhrada)', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', tile: 256,
       attr: 'Snímky © Esri, Maxar, Earthstar Geographics' },
   ],
   c: [
+    { nazov: 'WMS katastra – register C', caps: KN + '/eskn/services/NR/kn_wms_norm/MapServer/WmsServer', fmt: 'image/png&transparent=true' },
     { nazov: 'INSPIRE WMS – parcely C', url: INSPIRE + '/cp/ows?' + WMS_Q + '&format=image/png&transparent=true&layers=CP.CadastralParcel' },
-    { nazov: 'ÚGKK WMS – kataster C', caps: KN + '/eskn/services/NR/kn_wms_norm/MapServer/WmsServer',
-      wms: KN + '/eskn/services/NR/kn_wms_norm/MapServer/WmsServer?' + WMS_Q + '&format=image/png&transparent=true&layers=' },
-    { nazov: 'ÚGKK export – kataster C', url: REST + '/NR/kn_wms_norm/MapServer/export?' + EXPORT_Q },
   ],
   e: [
-    { nazov: 'INSPIRE WMS – parcely E', url: INSPIRE + '/cp_uo/ows?' + WMS_Q + '&format=image/png&transparent=true&layers=CP.CadastralParcel' },
-    { nazov: 'ÚGKK WMS – určený operát (E)', caps: KN + '/eskn/services/NR/uo_wms_norm/MapServer/WmsServer',
-      wms: KN + '/eskn/services/NR/uo_wms_norm/MapServer/WmsServer?' + WMS_Q + '&format=image/png&transparent=true&layers=' },
-    { nazov: 'ÚGKK export – určený operát (E)', url: REST + '/NR/uo_wms_norm/MapServer/export?' + EXPORT_Q },
+    { nazov: 'WMS katastra – register E', caps: KN + '/eskn/services/NR/uo_wms_norm/MapServer/WmsServer', fmt: 'image/png&transparent=true' },
+    { nazov: 'INSPIRE WMS – parcely E', caps: INSPIRE + '/cp_uo/ows', fmt: 'image/png&transparent=true' },
   ],
 };
 
-// Vektorové zdroje parciel (geometria + atribúty) – skúšajú sa v poradí.
+// Vektorové parcely (geometria + atribúty): INSPIRE WFS; názov typu sa overí z GetCapabilities.
 const PARCELY = {
-  c: { rest: REST + '/VRM/parcels_c_view/MapServer/0', wfs: INSPIRE + '/cp/ows', typ: 'cp:CadastralParcel', odata: KN + '/PortalOData/ParcelsC' },
-  e: { rest: REST + '/VRM/parcels_e_view/MapServer/0', wfs: INSPIRE + '/cp_uo/ows', typ: 'cp_uo:CadastralParcel', odata: KN + '/PortalOData/ParcelsE' },
+  c: { wfs: INSPIRE + '/cp/ows', typ: 'cp:CP.CadastralParcel' },
+  e: { wfs: INSPIRE + '/cp_uo/ows', typ: 'cp_uo:CP.CadastralParcel' },
 };
 
 // Číselník druhov pozemkov katastra nehnuteľností.
@@ -194,11 +184,12 @@ async function vyberRaster(kluc) {
   const t = tileBBox(S.obec.stred);
   for (const k of RASTRE[kluc]) {
     try {
-      const url = k.caps ? k.wms + encodeURIComponent(await capsLayers(k.caps)) : k.url;
+      let url = k.url, vrstvy;
+      if (k.caps) { vrstvy = await capsLayers(k.caps); url = `${k.caps}?${WMS_Q}&format=${k.fmt}&layers=${encodeURIComponent(vrstvy)}`; }
       const test = url.replace('{bbox-epsg-3857}', t.bbox).replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y);
       const r = await fetchT(test, {}, 15000);
       if (!r.ok || !/^image\//.test(r.headers.get('content-type') || '')) throw new Error('HTTP ' + r.status);
-      return (S.rastre[kluc] = { ...k, url });
+      return (S.rastre[kluc] = { ...k, url, vrstvy });
     } catch (e) { console.warn('Raster nedostupný:', k.nazov, e.message); }
   }
   return (S.rastre[kluc] = null);
@@ -277,8 +268,13 @@ function osmNaGeoJSON(json) {
 }
 async function nacitajObec(obec) {
   if (S.data[obec.id]) return S.data[obec.id];
-  const kluc = 'obec3d:v2:' + obec.id;
+  const kluc = 'obec3d:v3:' + obec.id;
   let d = cache.get(kluc, 7 * 864e5);
+  if (!d) { // predpripravený súbor (GitHub Actions), inak živý dopyt na Overpass
+    try { const r = await fetchT(`data/${obec.id}.json`, {}, 20000); if (r.ok) d = osmNaGeoJSON(await r.json()); } catch (e) {}
+    if (d && !d.budovy.features.length) d = null;
+    if (d) cache.set(kluc, d);
+  }
   if (!d) {
     const q = `[out:json][timeout:60];
 relation[boundary=administrative][name="${obec.nazov}"]${OKOLIE}->.r;
@@ -314,90 +310,90 @@ async function zobrazObec(obec) {
 }
 
 // ---------------------------------------------------------------- parcely (vektor)
-function esriNaGeom(g) {
-  if (!g || !g.rings) return null;
-  const out = [];
-  for (const r of g.rings) { const rr = fixOrder(r); if (ringArea(rr) >= 0 || !out.length) out.push([rr]); else out[out.length - 1].push(rr); }
-  return out.length === 1 ? { type: 'Polygon', coordinates: out[0] } : { type: 'MultiPolygon', coordinates: out };
-}
 // Zjednotenie atribútov z rôznych služieb. Polia s menami/vlastníkmi sa zámerne nepreberajú.
 function normalizuj(a, register, geom) {
-  const najdi = (re, zakaz) => { for (const k of Object.keys(a)) if (re.test(k) && !(zakaz && zakaz.test(k)) && a[k] != null && a[k] !== '') return a[k]; return null; };
+  const kluce = Object.keys(a).map((k) => [k.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''), k]);
+  const najdi = (re, zakaz) => { for (const [n, k] of kluce) if (re.test(n) && !(zakaz && zakaz.test(n)) && a[k] != null && a[k] !== '' && a[k] !== 'Null') return a[k]; return null; };
   const p = { register: register.toUpperCase() };
-  p.id = najdi(/^(id|parcel_?id|gid)$/i);
-  p.cislo = najdi(/^(parcel_?(number|no)|no|parcelne_?cislo|cislo|label)$/i) ?? najdi(/parcel.*(num|no)|cislo/i, /id|folio|unit/i);
-  const ref = najdi(/nationalcadastralreference/i);
+  p.cislo = najdi(/^(parcel_?(number|no)|no|parcelne_cislo|cislo_parcely|cislo|label)$/) ?? najdi(/parcel.*(num|no|cis)|cislo.*parc/, /id|folio|unit|lv/);
+  const ref = najdi(/nationalcadastralreference/);
   if (ref && !p.cislo) p.cislo = String(ref).split(/[.\-_ ]/).pop();
-  p.ku = najdi(/^(cadastral_?unit_?code|ku_?code|kod_?ku|ku)$/i) ?? najdi(/cadastral.*code|zoning.*code/i);
-  if (!p.ku && ref) { const m = String(ref).match(/\b(8\d{5})\b/); if (m) p.ku = m[1]; }
-  p.lv = najdi(/^(folio_?(number|no)?|lv|cislo_?lv|list_?vlastnictva)$/i) ?? najdi(/folio.*(num|no)|_lv$/i, /id$/i);
-  let druh = najdi(/^(kind|druh|druh_?pozemku|land_?(use|kind)|nature)(_?(name|code))?$/i) ?? najdi(/kind|druh/i, /id$/i);
+  p.ku = najdi(/^(cadastral_?unit_?code|ku_?code|kod_?ku|ku|cislo_ku)$/) ?? najdi(/cadastral.*code|zoning.*code|kod.*(ku|katastr)/);
+  if (!p.ku && ref) { const m = String(ref).match(/(?:^|\D)(8\d{5})(?:\D|$)/); if (m) p.ku = m[1]; }
+  p.kuNazov = najdi(/^(cadastral_?unit(_?name)?|katastralne_uzemie|nazov_ku)$/);
+  p.lv = najdi(/^(folio_?(number|no)?|lv|cislo_?lv|list_?vlastnictva|cislo_listu_vlastnictva)$/) ?? najdi(/folio.*(num|no)|_lv$|^lv_|list.*vlast/, /id$/);
+  let druh = najdi(/^(kind|druh|druh_?pozemku|land_?(use|kind)|nature)(_?(name|code))?$/) ?? najdi(/kind|druh.*poz/, /id$/);
   if (druh != null && DRUHY[+druh]) druh = DRUHY[+druh];
   p.druh = druh == null ? null : String(druh).toLowerCase();
-  const vym = najdi(/^(area|areavalue|vymera|parcel_?area)$/i) ?? najdi(/area|vymer/i, /shape|st_?area|len/i);
-  p.vymera = vym != null && !isNaN(+vym) ? +vym : null;
+  const vym = najdi(/^(area|areavalue|vymera|parcel_?area)$/) ?? najdi(/area|vymer/, /shape|st_?area|len/);
+  const vymN = vym == null ? NaN : parseFloat(String(vym).replace(/\s/g, '').replace(',', '.'));
+  p.vymera = isNaN(vymN) ? null : vymN;
   if (p.vymera == null && geom) { p.vymera = Math.round(areaM2(geom)); p.vymeraOdhad = true; }
   for (const k of Object.keys(p)) if (p[k] == null) delete p[k];
   return p;
 }
-async function restQuery(reg, params) {
-  const q = new URLSearchParams({ f: 'json', where: '1=1', outFields: '*', returnGeometry: 'true', inSR: '4326', outSR: '4326',
-    spatialRel: 'esriSpatialRelIntersects', ...params });
-  const r = await fetchT(PARCELY[reg].rest + '/query?' + q, {}, 30000);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const j = await r.json(); if (j.error) throw new Error(j.error.message || 'chyba služby');
-  return { exceeded: !!j.exceededTransferLimit, features: (j.features || []).map((f) => { const g = esriNaGeom(f.geometry); return g && { type: 'Feature', properties: normalizuj(f.attributes || {}, reg, g), geometry: g }; }).filter(Boolean) };
+async function wfsTyp(reg) {
+  const P = PARCELY[reg];
+  if (!P.overene) {
+    P.overene = true;
+    try {
+      const x = await (await fetchT(P.wfs + '?service=WFS&version=2.0.0&request=GetCapabilities', {}, 15000)).text();
+      const m = [...x.matchAll(/<Name>([^<]*CadastralParcel[^<]*)<\/Name>/g)].map((y) => y[1]);
+      if (m.length && !m.includes(P.typ)) P.typ = m[0];
+    } catch (e) {}
+  }
+  return P.typ;
 }
 async function wfsQuery(reg, bbox, count) {
-  const q = new URLSearchParams({ service: 'WFS', version: '2.0.0', request: 'GetFeature', typeNames: PARCELY[reg].typ, srsName: 'EPSG:4326',
+  const q = new URLSearchParams({ service: 'WFS', version: '2.0.0', request: 'GetFeature', typeNames: await wfsTyp(reg), srsName: 'EPSG:4326',
     outputFormat: 'application/json', count: String(count), bbox: [bbox[1], bbox[0], bbox[3], bbox[2]].join(',') + ',urn:ogc:def:crs:EPSG::4326' });
   const r = await fetchT(PARCELY[reg].wfs + '?' + q, {}, 40000);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   return { exceeded: (j.features || []).length >= count, features: (j.features || []).filter((f) => f.geometry).map((f) => {
     const g = { type: f.geometry.type, coordinates: fixOrder(f.geometry.coordinates) };
-    return { type: 'Feature', properties: normalizuj(f.properties || {}, reg, g), geometry: g };
+    return { type: 'Feature', id: f.id, properties: normalizuj(f.properties || {}, reg, g), geometry: g };
   }) };
 }
-// Doplnenie LV a druhu pozemku z verejného OData rozhrania katastra (bez údajov o vlastníkoch).
-async function doplnOData(reg, p) {
-  if ((p.lv && p.druh) || !p.id) return p;
+// Doplnenie LV a druhu pozemku cez WMS GetFeatureInfo katastra. Preberajú sa len údaje o parcele.
+async function doplnInfo(reg, p, ll) {
+  const k = S.rastre[reg] === undefined ? await vyberRaster(reg) : S.rastre[reg];
+  if ((p.lv && p.druh) || !k || !k.caps || !k.vrstvy) return p;
   try {
-    const r = await fetchT(`${PARCELY[reg].odata}(${encodeURIComponent(p.id)})?$select=Id,No,Area&$expand=Kind($select=Name,Code),Folio($select=No),CadastralUnit($select=Name,Code)`, { headers: { Accept: 'application/json' } }, 12000);
+    const R = 20037508.342789244, x = (ll.lng * R) / 180, y = (Math.log(Math.tan(((90 + ll.lat) * Math.PI) / 360)) * R) / Math.PI, d = 15;
+    const q = `service=WMS&version=1.3.0&request=GetFeatureInfo&styles=&crs=EPSG:3857&bbox=${x - d},${y - d},${x + d},${y + d}&width=101&height=101&i=50&j=50` +
+      `&layers=${encodeURIComponent(k.vrstvy)}&query_layers=${encodeURIComponent(k.vrstvy)}&feature_count=20&info_format=text/xml`;
+    const r = await fetchT(k.caps + '?' + q, {}, 12000);
     if (!r.ok) return p;
-    const j = await r.json();
-    if (j.No && !p.cislo) p.cislo = j.No;
-    if (j.Area != null) { p.vymera = +j.Area; delete p.vymeraOdhad; }
-    if (j.Kind?.Name) p.druh = String(j.Kind.Name).toLowerCase();
-    if (j.Folio?.No != null) p.lv = j.Folio.No;
-    if (j.CadastralUnit?.Code) p.ku = j.CadastralUnit.Code;
-    if (j.CadastralUnit?.Name) p.kuNazov = j.CadastralUnit.Name;
+    const xml = new DOMParser().parseFromString(await r.text(), 'text/xml');
+    for (const el of xml.getElementsByTagName('*')) {
+      if (!el.attributes.length || el.children.length) continue;
+      const a = {}; for (const at of el.attributes) a[at.name] = at.value;
+      const n = normalizuj(a, reg);
+      if (n.cislo && p.cislo && String(n.cislo) !== String(p.cislo)) continue; // iná parcela
+      for (const f of ['cislo', 'lv', 'druh', 'ku', 'kuNazov']) if (p[f] == null && n[f] != null) p[f] = n[f];
+      if (n.vymera != null && (p.vymera == null || p.vymeraOdhad)) { p.vymera = n.vymera; delete p.vymeraOdhad; }
+    }
   } catch (e) { /* služba nedostupná – ponecháme, čo máme */ }
   return p;
 }
 async function parcelaVBode(reg, ll) {
-  const p = [ll.lng, ll.lat];
-  try {
-    const r = await restQuery(reg, { geometry: p.join(','), geometryType: 'esriGeometryPoint' });
-    if (r.features.length) return r.features.find((f) => inGeom(p, f.geometry)) || r.features[0];
-    return null;
-  } catch (e) { console.warn('REST identifikácia zlyhala:', e.message); }
-  const d = 0.0003, r = await wfsQuery(reg, [p[0] - d, p[1] - d, p[0] + d, p[1] + d], 200);
+  const p = [ll.lng, ll.lat], d = 0.0003;
+  const r = await wfsQuery(reg, [p[0] - d, p[1] - d, p[0] + d, p[1] + d], 300);
   return r.features.find((f) => inGeom(p, f.geometry)) || null;
 }
 async function nacitajParcelyObce() {
   if (S.parcely) return S.parcely;
   const d = await nacitajObec(S.obec), hr = d.hranica.geometry;
   if (!hr) throw new Error('Chýba hranica obce');
-  const b = bboxOf(hr); let feats = [], zdroj = 'ÚGKK REST';
+  const b = bboxOf(hr); let feats = [];
+  const zdroj = 'INSPIRE WFS';
   const N = 4, dx = (b[2] - b[0]) / N, dy = (b[3] - b[1]) / N; // po dlaždiciach, aby sme neprekročili limit služby
   const dlazdice = []; for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) dlazdice.push([b[0] + i * dx, b[1] + j * dy, b[0] + (i + 1) * dx, b[1] + (j + 1) * dy]);
   let hotovo = 0;
   const jedna = async (bb, hlbka = 0) => {
-    let r;
-    try { r = await restQuery('c', { geometry: bb.join(','), geometryType: 'esriGeometryEnvelope' }); }
-    catch (e) { zdroj = 'INSPIRE WFS'; r = await wfsQuery('c', bb, 3000); }
-    if (r.exceeded && hlbka < 3) { // rozdeliť na štvrtiny
+    const r = await wfsQuery('c', bb, 2000);
+    if (r.exceeded && hlbka < 4) { // rozdeliť na štvrtiny
       const mx = (bb[0] + bb[2]) / 2, my = (bb[1] + bb[3]) / 2;
       for (const q of [[bb[0], bb[1], mx, my], [mx, bb[1], bb[2], my], [bb[0], my, mx, bb[3]], [mx, my, bb[2], bb[3]]]) await jedna(q, hlbka + 1);
     } else feats = feats.concat(r.features);
@@ -406,7 +402,7 @@ async function nacitajParcelyObce() {
   // odstrániť duplicity a parcely mimo obce, vyznačiť zastavanosť
   const videne = new Set(), stredy = d.budovy.features.map((f) => centroid(f.geometry.coordinates[0]));
   feats = feats.filter((f) => {
-    const k = f.properties.id ?? (f.properties.ku + '/' + f.properties.cislo); if (videne.has(k)) return false; videne.add(k);
+    const k = f.id ?? (f.properties.ku + '/' + f.properties.cislo + '/' + f.properties.vymera); if (videne.has(k)) return false; videne.add(k);
     return inGeom(centroid(polys(f.geometry)[0][0]), hr);
   });
   feats.forEach((f, i) => {
@@ -494,10 +490,10 @@ async function naKlik(e) {
   } catch (err) { console.warn(err); }
   if (n !== klikN) return;
   let p = null;
-  if (f) { map.getSource('vyber').setData(f); p = await doplnOData(reg, { ...f.properties }); if (n !== klikN) return; }
+  if (f) { map.getSource('vyber').setData(f); p = await doplnInfo(reg, { ...f.properties }, ll); if (n !== klikN) return; }
   let eHtml = '';
   if (f && reg === 'c' && $('lyrE').checked) {
-    try { const fe = await parcelaVBode('e', ll); if (fe && n === klikN) eHtml = htmlParcela(await doplnOData('e', { ...fe.properties })).replace('<h3>', '<h4>Register E</h4><h3>'); } catch (err) {}
+    try { const fe = await parcelaVBode('e', ll); if (fe && n === klikN) eHtml = htmlParcela(await doplnInfo('e', { ...fe.properties }, ll)).replace('<h3>', '<h4>Register E</h4><h3>'); } catch (err) {}
   }
   if (n !== klikN) return;
   $('infoBody').innerHTML = htmlParcela(p) + hlava + eHtml + odkazy(p, ll);
