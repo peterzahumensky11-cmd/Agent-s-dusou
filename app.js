@@ -136,7 +136,7 @@ const map = new maplibregl.Map({
     version: 8,
     sources: {
       osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' },
-      hranica: { type: 'geojson', data: prazdne() }, budovy: { type: 'geojson', data: prazdne() },
+      hranica: { type: 'geojson', data: prazdne() }, budovy: { type: 'geojson', data: prazdne() }, strechy: { type: 'geojson', data: prazdne() },
       parcely: { type: 'geojson', data: prazdne() }, vyber: { type: 'geojson', data: prazdne() },
     },
     layers: [
@@ -149,7 +149,10 @@ const map = new maplibregl.Map({
       { id: 'vyber-line', type: 'line', source: 'vyber', paint: { 'line-color': '#00e5ff', 'line-width': 3 } },
       { id: 'budovy', type: 'fill-extrusion', source: 'budovy', paint: {
         'fill-extrusion-color': ['case', ['boolean', ['feature-state', 'sel'], false], '#00e5ff', ['get', 'farba']],
-        'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.92 } },
+        'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': 0, 'fill-extrusion-vertical-gradient': true } },
+      { id: 'strechy', type: 'fill-extrusion', source: 'strechy', paint: {
+        'fill-extrusion-color': ['get', 'farba'], 'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': ['get', 'b'],
+        'fill-extrusion-vertical-gradient': false } },
     ],
   },
 });
@@ -215,6 +218,28 @@ function prepniPodklad(typ) {
   zapniRaster('orto', typ === 'orto');
 }
 
+// ---------------------------------------------------------------- 3D terén (voľné výškové dáta Terrain Tiles / Mapzen)
+const DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+async function zapniTeren(on) {
+  try {
+    if (on && !map.getSource('dem')) {
+      // najprv overiť, že výškové dáta odpovedajú – bez nich by sa mapa nevykreslila
+      stav('teren', '', '3D terén: overujem…');
+      const t = tileBBox(S.obec.stred, 12), r = await fetchT(DEM.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y), {}, 8000);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (map.getSource('dem')) return;
+      map.addSource('dem', { type: 'raster-dem', tiles: [DEM], tileSize: 256, maxzoom: 14, encoding: 'terrarium', attribution: 'Výšky: Mapzen Terrain Tiles' });
+    }
+    if (on && !$('lyrTeren').checked) return;
+    map.setTerrain(on ? { source: 'dem', exaggeration: 1 } : null);
+    stav('teren', on ? 'ok' : '', on ? '3D terén: zapnutý' : '3D terén: vypnutý');
+  } catch (e) { console.warn(e); map.setTerrain(null); $('lyrTeren').checked = false; stav('teren', 'bad', '3D terén: výškové dáta nedostupné'); }
+}
+map.on('error', (e) => {
+  console.warn('Chyba mapy:', e.sourceId || '', e.error && e.error.message);
+  if (e.sourceId === 'dem' && map.getTerrain()) { map.setTerrain(null); $('lyrTeren').checked = false; stav('teren', 'bad', '3D terén: výškové dáta nedostupné'); }
+});
+
 // ---------------------------------------------------------------- OpenStreetMap: hranica obce a budovy
 async function overpass(q) {
   let chyba;
@@ -238,13 +263,13 @@ function farbaBudovy(t) {
   if (/^(garage|garages|shed|hut|carport|greenhouse|roof)$/.test(t.building)) return '#b9b3a6';
   if (/^(industrial|warehouse|farm_auxiliary|barn|commercial|retail)$/.test(t.building)) return '#a9b4c2';
   if (/^(school|kindergarten|public|civic|government)$/.test(t.building)) return '#e6c7a1';
-  return '#efe6d8';
+  return ['#efe6d8', '#e9dcc6', '#f3ead9', '#e4d8c8', '#f0e2c9', '#ddd6cb'][((t.__id || 0) % 6)];
 }
 function osmNaGeoJSON(json) {
   const budovy = [], hrany = [];
   const tagy = (e) => {
-    const t = e.tags || {}, p = { osm: e.type + '/' + e.id, h: vyskaBudovy(t), farba: farbaBudovy(t) };
-    for (const k of ['building', 'building:levels', 'addr:housenumber', 'addr:conscriptionnumber', 'addr:streetnumber', 'addr:street', 'name', 'amenity', 'shop']) if (t[k]) p[k] = t[k];
+    const t = e.tags || {}, p = { osm: e.type + '/' + e.id, h: vyskaBudovy(t), farba: farbaBudovy({ ...t, __id: e.id }) };
+    for (const k of ['building', 'building:levels', 'roof:shape', 'roof:height', 'roof:colour', 'building:colour', 'addr:housenumber', 'addr:conscriptionnumber', 'addr:streetnumber', 'addr:street', 'name', 'amenity', 'shop']) if (t[k]) p[k] = t[k];
     return p;
   };
   const line = (g) => g.map((c) => [c.lon, c.lat]);
@@ -266,9 +291,60 @@ function osmNaGeoJSON(json) {
     hranica: { type: 'Feature', properties: {}, geometry: obrys.length ? { type: 'MultiPolygon', coordinates: obrys.map((r) => [r]) } : null },
     hrany: { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: hrany } } };
 }
+// ---------------------------------------------------------------- strechy (odhad tvaru z pôdorysu)
+const FARBY_STRIECH = ['#a5523a', '#8c4a3a', '#7a3b32', '#b0603f', '#6f5a50', '#5f6266', '#93462f'];
+function orez(poly, nx, ny, c) { // ponechá časť mnohouholníka, kde nx*x + ny*y <= c
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const A = poly[i], B = poly[(i + 1) % poly.length], da = nx * A[0] + ny * A[1] - c, db = nx * B[0] + ny * B[1] - c;
+    if (da <= 0) out.push(A);
+    if ((da < 0 && db > 0) || (da > 0 && db < 0)) { const t = da / (da - db); out.push([A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])]); }
+  }
+  return out;
+}
+function vyrobStrechy(fc) {
+  const out = [], N = 8;
+  for (const f of fc.features) {
+    const p = f.properties, ring = f.geometry.coordinates[0];
+    const lon0 = ring[0][0], lat0 = ring[0][1], kx = Math.cos((lat0 * Math.PI) / 180) * 111320, ky = 110574;
+    const pts = ring.slice(0, -1).map((c) => [(c[0] - lon0) * kx, (c[1] - lat0) * ky]);
+    if (pts.length < 3) continue;
+    const plocha = Math.abs(ringArea(pts));
+    // najmenší opísaný obdĺžnik podľa smerov hrán
+    let naj = null;
+    for (let i = 0; i < pts.length; i++) {
+      const A = pts[i], B = pts[(i + 1) % pts.length], d = Math.hypot(B[0] - A[0], B[1] - A[1]); if (d < 0.5) continue;
+      const ux = (B[0] - A[0]) / d, uy = (B[1] - A[1]) / d; let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+      for (const q of pts) { const u = q[0] * ux + q[1] * uy, v = -q[0] * uy + q[1] * ux; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+      const a = (u1 - u0) * (v1 - v0);
+      if (!naj || a < naj.a) naj = { a, ux, uy, u0, u1, v0, v1 };
+    }
+    if (!naj) continue;
+    let { ux, uy, u0, u1, v0, v1 } = naj;
+    if (u1 - u0 < v1 - v0) { [ux, uy] = [-uy, ux]; [u0, u1, v0, v1] = [v0, v1, -u1, -u0]; } // os u = dlhšia strana (hrebeň)
+    const L = u1 - u0, W = v1 - v0, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2, vx = -uy, vy = ux;
+    const tvar = (p['roof:shape'] || '').toLowerCase();
+    const plocha_ = /^(flat|skillion)$/.test(tvar) || (!tvar && (/^(garage|garages|shed|hut|carport|roof|greenhouse|industrial|warehouse|retail|commercial)$/.test(p.building) || plocha < 30 || W > 15 || plocha > 600 || plocha / naj.a < 0.6));
+    if (plocha_) continue;
+    const valbova = /hip|pyramid|tented|dome/.test(tvar) || (!tvar && L / W < 1.25);
+    const zadana = parseFloat(p['roof:height']);
+    const vyska = zadana > 0 ? zadana : Math.max(1.5, Math.min(4.5, W * (valbova ? 0.3 : 0.38)));
+    const farba = /^#[0-9a-f]{3,6}$/i.test(p['roof:colour'] || '') ? p['roof:colour'] : FARBY_STRIECH[f.id % FARBY_STRIECH.length];
+    for (let i = 0; i < N; i++) {
+      const t = (i + 0.5) / N, hw = ((1 - t) * W) / 2;
+      let poly = orez(orez(pts, vx, vy, cv + hw), -vx, -vy, -(cv - hw));
+      if (valbova) { const hl = L / 2 - (t * W) / 2; poly = orez(orez(poly, ux, uy, cu + hl), -ux, -uy, -(cu - hl)); }
+      if (poly.length < 3 || Math.abs(ringArea(poly)) < 0.5) continue;
+      const r = poly.map((q) => [lon0 + q[0] / kx, lat0 + q[1] / ky]); r.push(r[0]);
+      out.push({ type: 'Feature', properties: { bid: f.id, farba, b: p.h + (i * vyska) / N, h: p.h + ((i + 1) * vyska) / N }, geometry: { type: 'Polygon', coordinates: [r] } });
+    }
+  }
+  return { type: 'FeatureCollection', features: out };
+}
+
 async function nacitajObec(obec) {
   if (S.data[obec.id]) return S.data[obec.id];
-  const kluc = 'obec3d:v3:' + obec.id;
+  const kluc = 'obec3d:v4:' + obec.id;
   let d = cache.get(kluc, 7 * 864e5);
   if (!d) { // predpripravený súbor (GitHub Actions), inak živý dopyt na Overpass
     try { const r = await fetchT(`data/${obec.id}.json`, {}, 20000); if (r.ok) d = osmNaGeoJSON(await r.json()); } catch (e) {}
@@ -290,6 +366,7 @@ out tags geom;`;
 async function zobrazObec(obec) {
   S.obec = obec; zrusVyber(); zavriInfo();
   map.getSource('parcely').setData(prazdne()); S.parcely = null;
+  map.getSource('budovy').setData(prazdne()); map.getSource('strechy').setData(prazdne());
   if ($('fOn').checked) { $('fOn').checked = false; $('fBox').classList.add('off'); $('fStav').textContent = ''; }
   map.flyTo({ center: obec.stred, zoom: obec.zoom, pitch: 55, bearing: -15, duration: 1200 });
   stav('osm', '', 'Budovy OSM: načítavam…');
@@ -297,6 +374,7 @@ async function zobrazObec(obec) {
     const d = await nacitajObec(obec);
     if (S.obec !== obec) return;
     map.getSource('budovy').setData(d.budovy);
+    map.getSource('strechy').setData(d.strechy || (d.strechy = vyrobStrechy(d.budovy)));
     map.getSource('hranica').setData(d.hrany);
     stav('osm', d.budovy.features.length ? 'ok' : 'warn', `Budovy OSM: ${d.budovy.features.length}`);
     if (d.hranica.geometry) {
@@ -476,7 +554,8 @@ let klikN = 0;
 async function naKlik(e) {
   const n = ++klikN, ll = e.lngLat;
   zrusVyber();
-  const bud = map.queryRenderedFeatures(e.point, { layers: ['budovy'] })[0];
+  const hit = map.queryRenderedFeatures(e.point, { layers: ['budovy', 'strechy'] })[0];
+  const bud = !hit ? null : hit.layer.id === 'budovy' ? hit : (S.data[S.obec.id]?.budovy.features.find((b) => b.id === hit.properties.bid) || null);
   const lok = $('fOn').checked ? map.queryRenderedFeatures(e.point, { layers: ['parcely-fill'] })[0] : null;
   if (bud) { S.vybranaBudova = bud.id; map.setFeatureState({ source: 'budovy', id: bud.id }, { sel: true }); }
   const hlava = bud ? htmlBudova(bud.properties) : '';
@@ -510,7 +589,8 @@ function init() {
   $('btnPanel').onclick = () => { const p = $('panel'); p.hidden = !p.hidden; $('btnPanel').setAttribute('aria-expanded', String(!p.hidden)); };
   $('infoClose').onclick = () => { zavriInfo(); zrusVyber(); };
   document.querySelectorAll('input[name=base]').forEach((r) => (r.onchange = () => prepniPodklad(r.value)));
-  $('lyrBudovy').onchange = (e) => map.setLayoutProperty('budovy', 'visibility', e.target.checked ? 'visible' : 'none');
+  $('lyrBudovy').onchange = (e) => { for (const l of ['budovy', 'strechy']) map.setLayoutProperty(l, 'visibility', e.target.checked ? 'visible' : 'none'); };
+  $('lyrTeren').onchange = (e) => zapniTeren(e.target.checked);
   $('lyrHranica').onchange = (e) => map.setLayoutProperty('hranica', 'visibility', e.target.checked ? 'visible' : 'none');
   $('lyrC').onchange = (e) => zapniRaster('c', e.target.checked);
   $('lyrE').onchange = (e) => zapniRaster('e', e.target.checked);
