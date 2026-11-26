@@ -1,0 +1,8 @@
+data/raw/
+*.tif
+*.tiff
+*.tfw
+*.laz
+*.las
+*.zip
+__pycache__/

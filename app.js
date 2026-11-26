@@ -291,7 +291,22 @@ function osmNaGeoJSON(json) {
     hranica: { type: 'Feature', properties: {}, geometry: obrys.length ? { type: 'MultiPolygon', coordinates: obrys.map((r) => [r]) } : null },
     hrany: { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: hrany } } };
 }
-// ---------------------------------------------------------------- strechy (odhad tvaru z pôdorysu)
+// ---------------------------------------------------------------- výšky a strechy z LiDAR-u (data/vysky.json, scripts/vysky_z_lidaru.py)
+// Záznam: "way/123": [odkvap m, hrebeň m, azimut °, typ]; typ 0 plochá, 1 sedlová, 2 valbová, 3 pultová, 4 zložitá.
+// Domy bez záznamu ostávajú pri odhade z OSM značiek a pôdorysu.
+const LLS = fetchT('data/vysky.json', {}, 20000).then((r) => (r.ok ? r.json() : null)).then((j) => (j && j.domy) || null).catch(() => null);
+function pouziLLS(fc, domy) {
+  let n = 0;
+  for (const f of fc.features) {
+    const p = f.properties, v = domy && domy[p.osm];
+    if (!Array.isArray(v) || !(v[0] > 0) || !(v[1] >= v[0])) continue;
+    p.h = v[0]; p.hr = v[1]; p.az = v[2] || 0; p.ts = v[3] || 0; n++;
+  }
+  return n;
+}
+const TYPY_STRIECH = ['plochá', 'sedlová', 'valbová', 'pultová', 'zložitá'];
+
+// ---------------------------------------------------------------- strechy (z LiDAR-u, inak odhad tvaru z pôdorysu)
 const FARBY_STRIECH = ['#a5523a', '#8c4a3a', '#7a3b32', '#b0603f', '#6f5a50', '#5f6266', '#93462f'];
 function orez(poly, nx, ny, c) { // ponechá časť mnohouholníka, kde nx*x + ny*y <= c
   const out = [];
@@ -322,21 +337,38 @@ function vyrobStrechy(fc) {
     if (!naj) continue;
     let { ux, uy, u0, u1, v0, v1 } = naj;
     if (u1 - u0 < v1 - v0) { [ux, uy] = [-uy, ux]; [u0, u1, v0, v1] = [v0, v1, -u1, -u0]; } // os u = dlhšia strana (hrebeň)
+    const lls = p.hr > 0, farba = /^#[0-9a-f]{3,6}$/i.test(p['roof:colour'] || '') ? p['roof:colour'] : FARBY_STRIECH[f.id % FARBY_STRIECH.length];
+    const pridaj = (poly, i, vyska) => {
+      if (poly.length < 3 || Math.abs(ringArea(poly)) < 0.5) return;
+      const r = poly.map((q) => [lon0 + q[0] / kx, lat0 + q[1] / ky]); r.push(r[0]);
+      out.push({ type: 'Feature', properties: { bid: f.id, farba, b: p.h + (i * vyska) / N, h: p.h + ((i + 1) * vyska) / N }, geometry: { type: 'Polygon', coordinates: [r] } });
+    };
+    if (lls) {
+      const vyska = p.hr - p.h;
+      if (p.ts === 0 || vyska < 0.3) continue; // plochá strecha
+      if (p.ts === 3) { // pultová: stúpa v smere azimutu
+        const dx = Math.sin((p.az * Math.PI) / 180), dy = Math.cos((p.az * Math.PI) / 180);
+        let d0 = Infinity, d1 = -Infinity; for (const q of pts) { const d = q[0] * dx + q[1] * dy; d0 = Math.min(d0, d); d1 = Math.max(d1, d); }
+        for (let i = 0; i < N; i++) pridaj(orez(pts, -dx, -dy, -(d0 + ((i + 0.5) / N) * (d1 - d0))), i, vyska);
+        continue;
+      }
+      if (p.ts === 1) { // sedlová: hrebeň pozdĺž tej osi pôdorysu, ktorá je bližšie k nameranému smeru
+        let rozdiel = Math.abs((((Math.atan2(ux, uy) * 180) / Math.PI - p.az) % 180 + 180) % 180); if (rozdiel > 90) rozdiel = 180 - rozdiel;
+        if (rozdiel > 45) { [ux, uy] = [-uy, ux]; [u0, u1, v0, v1] = [v0, v1, -u1, -u0]; }
+      }
+    }
     const L = u1 - u0, W = v1 - v0, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2, vx = -uy, vy = ux;
     const tvar = (p['roof:shape'] || '').toLowerCase();
-    const plocha_ = /^(flat|skillion)$/.test(tvar) || (!tvar && (/^(garage|garages|shed|hut|carport|roof|greenhouse|industrial|warehouse|retail|commercial)$/.test(p.building) || plocha < 30 || W > 15 || plocha > 600 || plocha / naj.a < 0.6));
+    const plocha_ = lls ? false : /^(flat|skillion)$/.test(tvar) || (!tvar && (/^(garage|garages|shed|hut|carport|roof|greenhouse|industrial|warehouse|retail|commercial)$/.test(p.building) || plocha < 30 || W > 15 || plocha > 600 || plocha / naj.a < 0.6));
     if (plocha_) continue;
-    const valbova = /hip|pyramid|tented|dome/.test(tvar) || (!tvar && L / W < 1.25);
+    const valbova = lls && p.ts !== 4 ? p.ts === 2 : /hip|pyramid|tented|dome/.test(tvar) || (!tvar && L / W < 1.25);
     const zadana = parseFloat(p['roof:height']);
-    const vyska = zadana > 0 ? zadana : Math.max(1.5, Math.min(4.5, W * (valbova ? 0.3 : 0.38)));
-    const farba = /^#[0-9a-f]{3,6}$/i.test(p['roof:colour'] || '') ? p['roof:colour'] : FARBY_STRIECH[f.id % FARBY_STRIECH.length];
+    const vyska = lls ? p.hr - p.h : zadana > 0 ? zadana : Math.max(1.5, Math.min(4.5, W * (valbova ? 0.3 : 0.38)));
     for (let i = 0; i < N; i++) {
       const t = (i + 0.5) / N, hw = ((1 - t) * W) / 2;
       let poly = orez(orez(pts, vx, vy, cv + hw), -vx, -vy, -(cv - hw));
       if (valbova) { const hl = L / 2 - (t * W) / 2; poly = orez(orez(poly, ux, uy, cu + hl), -ux, -uy, -(cu - hl)); }
-      if (poly.length < 3 || Math.abs(ringArea(poly)) < 0.5) continue;
-      const r = poly.map((q) => [lon0 + q[0] / kx, lat0 + q[1] / ky]); r.push(r[0]);
-      out.push({ type: 'Feature', properties: { bid: f.id, farba, b: p.h + (i * vyska) / N, h: p.h + ((i + 1) * vyska) / N }, geometry: { type: 'Polygon', coordinates: [r] } });
+      pridaj(poly, i, vyska);
     }
   }
   return { type: 'FeatureCollection', features: out };
@@ -361,6 +393,7 @@ out tags geom;`;
     d = osmNaGeoJSON(await overpass(q));
     if (d.budovy.features.length) cache.set(kluc, d);
   }
+  d.lls = pouziLLS(d.budovy, await LLS);
   return (S.data[obec.id] = d);
 }
 async function zobrazObec(obec) {
@@ -377,6 +410,7 @@ async function zobrazObec(obec) {
     map.getSource('strechy').setData(d.strechy || (d.strechy = vyrobStrechy(d.budovy)));
     map.getSource('hranica').setData(d.hrany);
     stav('osm', d.budovy.features.length ? 'ok' : 'warn', `Budovy OSM: ${d.budovy.features.length}`);
+    stav('lls', d.lls ? 'ok' : 'warn', d.lls ? `Výšky a strechy z LiDAR-u: ${d.lls} z ${d.budovy.features.length} domov` : 'Výšky domov: odhad (dáta z LiDAR-u nie sú k dispozícii)');
     if (d.hranica.geometry) {
       const b = bboxOf(d.hranica.geometry);
       map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, pitch: 55, bearing: -15, duration: 1000, maxZoom: 16 });
@@ -547,7 +581,8 @@ function htmlBudova(b) {
   const cislo = b['addr:conscriptionnumber'] || b['addr:housenumber'];
   const adresa = [b['addr:street'], b['addr:streetnumber'] || (b['addr:conscriptionnumber'] ? b['addr:housenumber'] : null)].filter(Boolean).join(' ');
   const r = [['Súpisné č.', cislo], ['Adresa', adresa], ['Názov', b.name], ['Typ', b.building !== 'yes' ? b.building : null],
-    ['Podlažia', b['building:levels']], ['Výška v modeli', b.h + ' m']].filter((x) => x[1]);
+    ['Podlažia', b['building:levels']],
+    b.hr > 0 ? ['Výška (LiDAR ÚGKK SR)', b.ts === 0 ? `${b.h} m, strecha plochá` : `odkvap ${b.h} m, hrebeň ${b.hr} m, strecha ${TYPY_STRIECH[b.ts] || ''}`] : ['Výška v modeli (odhad)', b.h + ' m']].filter((x) => x[1]);
   return `<h4>Dom (OpenStreetMap)</h4><dl>${r.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
 }
 let klikN = 0;
